@@ -1,9 +1,24 @@
+"""栅格文件处理"""
+
 import uuid
 
 import numpy as np
 import ogr
 import osr
 from osgeo import gdal
+
+
+class RasterBlock(object):
+
+    def __init__(self):
+        self.x_id: int = 0  # x向分块编号
+        self.y_id: int = 0  # y向分块编号
+        self.x_offset: int = 0  # x向偏移量/像素
+        self.y_offset: int = 0  # y向偏移量/像素
+        self.properties = None
+
+    def get_block_name(self):
+        return "{:04d}_{:04d}.tif".format(self.x_id, self.y_id)
 
 
 class RasterProperties(object):
@@ -18,8 +33,10 @@ class RasterProperties(object):
         self.proj: str = ""  # 投影信息
         self.dtype: int = 0  # 数据类型 0代表GDT_Unknown
         # 间接获取
+        self.x_res: float = 0  # x向分辨率
+        self.y_res: float = 0  # y向分辨率
+        self.extent = ()  # 四至范围 (x_min,y_min,x_max,y_max)
         self.dtype_name: str = ""  # 数据类型名称
-        self.cell_size: tuple = ()  # xy向分辨率
         self.nodata_value: list = []  # 各波段无效值
 
     def auto_set_dtype(self, np_dtype):
@@ -42,6 +59,7 @@ class Raster(object):
 
     @staticmethod
     def open_raster(filepath):
+        """打开文件，返回raster对象"""
         raster = Raster()
         raster.filepath = filepath
         raster.dataset = gdal.Open(filepath, gdal.GA_ReadOnly)
@@ -50,7 +68,7 @@ class Raster(object):
 
     @staticmethod
     def create_raster(filepath, properties):
-        """创建输出栅格"""
+        """创建输出栅格对象"""
         raster = Raster()
         raster.properties = properties  # 设置栅格属性
         if filepath == "":
@@ -61,6 +79,7 @@ class Raster(object):
         dataset = driver.Create(filepath, properties.width, properties.height, properties.bands, properties.dtype)
         dataset.SetGeoTransform(properties.geotrans)
         dataset.SetProjection(properties.proj)
+        # TODO 继承波段描述信息
         for i in range(properties.bands):
             if properties.nodata_value[i] is None:
                 continue
@@ -70,7 +89,7 @@ class Raster(object):
         return raster
 
     def read_properties(self):
-        """读取属性"""
+        """读取栅格属性"""
         # 直接获取属性
         self.properties.width = self.dataset.RasterXSize
         self.properties.height = self.dataset.RasterYSize
@@ -80,12 +99,17 @@ class Raster(object):
         self.properties.dtype = self.dataset.GetRasterBand(1).DataType
         # 间接获取属性
         self.properties.dtype_name = gdal.GetDataTypeName(self.properties.dtype)
-        self.properties.cell_size = (abs(self.properties.geotrans[1]), abs(self.properties.geotrans[5]))
+        self.properties.x_res = self.properties.geotrans[1]
+        self.properties.y_res = self.properties.geotrans[5]
+        self.properties.extent = (self.properties.geotrans[0],
+                                  self.properties.geotrans[3],
+                                  self.properties.geotrans[0] + self.properties.width * self.properties.x_res,
+                                  self.properties.geotrans[3] + self.properties.height * self.properties.y_res)
         for i in range(self.properties.bands):
             self.properties.nodata_value.append(self.dataset.GetRasterBand(i + 1).GetNoDataValue())
 
     def read_array(self, x_offset=0, y_offset=0, x_size=None, y_size=None, band=None):
-        """读取数组数据"""
+        """读取波段数据"""
         if band:
             array = self.dataset.GetRasterBand(band).ReadAsArray(xoff=x_offset, yoff=y_offset,
                                                                  win_xsize=x_size, win_ysize=y_size)
@@ -95,6 +119,7 @@ class Raster(object):
         return array
 
     def copy_properties(self):
+        """复制栅格属性，返回properties对象"""
         properties = RasterProperties()
 
         properties.width = self.properties.width
@@ -104,13 +129,14 @@ class Raster(object):
         properties.proj = self.properties.proj
         properties.dtype = self.properties.dtype
         properties.dtype_name = self.properties.dtype_name
-        properties.cell_size = self.properties.cell_size
+        properties.x_res = self.properties.x_res
+        properties.y_res = self.properties.y_res
         properties.nodata_value = self.properties.nodata_value
 
         return properties
 
     def set_array(self, array, band=None):
-        """保存数组数据"""
+        """存储波段数据"""
         if band:
             self.dataset.GetRasterBand(band).WriteArray(array)
         else:
@@ -151,42 +177,56 @@ class Raster(object):
         shp_ds.SyncToDisk()
         shp_ds = None
 
+    def get_block_plan(self, block_size=128, overlap=0):
+        """
+        对大栅格文件进行分块处理，做分块计划
+        @param block_size: 分块大小
+        @param overlap: 重叠率
+        """
+        # 计算分块信息
+        overlap = overlap / 100.0
+        step_x = int(block_size * (1 - overlap))
+        step_y = int(block_size * (1 - overlap))
+        # 计算block数量
+        col_num = int(np.ceil(self.properties.width / step_x))
+        row_num = int(np.ceil(self.properties.height / step_y))
+
+        block_list = []
+        for col_index in range(col_num):
+            for row_index in range(row_num):
+                # 创建Block对象
+                block = RasterBlock()
+                block.x_id = col_index + 1
+                block.y_id = row_index + 1
+
+                # 当前block偏移像素
+                block.x_offset = col_index * step_x
+                block.y_offset = row_index * step_y
+                # 当前block实际行列
+                block_width = min(block_size, self.properties.width - block.x_offset)
+                block_height = min(block_size, self.properties.height - block.y_offset)
+
+                # 创建block属性对象
+                properties = self.copy_properties()
+                properties.width = block_width
+                properties.height = block_height
+                properties.geotrans = (self.properties.geotrans[0] + block.x_offset * self.properties.x_res,
+                                       self.properties.x_res,
+                                       0.0,
+                                       self.properties.geotrans[3] + block.y_offset * self.properties.y_res,
+                                       0.0,
+                                       self.properties.y_res)
+                properties.extent = (properties.geotrans[0],
+                                     properties.geotrans[3],
+                                     properties.geotrans[0] + properties.width * properties.x_res,
+                                     properties.geotrans[3] + properties.height * properties.y_res)
+                block.properties = properties  # 设置属性
+
+                # 添加到列表
+                block_list.append(block)
+
+        return block_list
+
 
 if __name__ == '__main__':
-    # == 读取栅格文件 == #
-    in_path_ = r'C:\Users\Lenovo\Desktop\1\0001_0001_RGB.tif'
-    raster1_ = Raster.open_raster(in_path_)
-    array1_ = raster1_.read_array()
-    array2_ = raster1_.read_array(band=2)
-    properties_ = raster1_.copy_properties()
-    raster1_.close()
-
-    # == 保存栅格文件 == #
-    # 写出所有波段
-    # out_path_ = r'C:\Users\Lenovo\Desktop\1\0001_0001_RGB_save2.tif'
-    # properties_.auto_set_dtype(array1_.dtype)
-    # raster2_ = Raster.create_raster(out_path_, properties_)
-    # raster2_.set_array(array1_)
-    # raster2_.close()
-
-    # 写出单波段
-    out_path_ = r'C:\Users\Lenovo\Desktop\1\0001_0001_RGB_save3.tif'
-    properties_.bands = 1
-    array2_ = array2_ * 1.0
-    properties_.auto_set_dtype(array2_.dtype)
-    raster3_ = Raster.create_raster(out_path_, properties_)
-    raster3_.set_array(array2_)
-    raster3_.close()
-
-    # 保存在内存中
-    # raster4_ = Raster.create_raster("", properties_)
-    # mask_array_ = array2_ > 100
-    # array2_[array2_ < 100] = 0
-    # array2_[array2_ > 100] = 255
-    # raster4_.set_array(array2_)
-    # # do something
-    # shp_path_1 = r"C:\Users\Lenovo\Desktop\1\out.shp"
-    # raster4_.to_shapefile(shp_path_1, mask_array=mask_array_)
-    # raster4_.close()
-
     print("Finish")
