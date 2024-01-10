@@ -3,9 +3,7 @@
 import uuid
 
 import numpy as np
-import ogr
-import osr
-from osgeo import gdal
+from osgeo import gdal, ogr, osr
 
 
 class RasterBlock(object):
@@ -39,8 +37,9 @@ class RasterProperties(object):
         self.dtype_name: str = ""  # 数据类型名称
         self.nodata_value: list = []  # 各波段无效值
 
-    def auto_set_dtype(self, np_dtype):
+    def auto_set_dtype(self, np_array):
         """根据numpy数组类型自动设置数据类型"""
+        np_dtype = np_array.dtype
         dict_ = {
             "uint8": gdal.GDT_Byte,
             "uint16": gdal.GDT_UInt16,

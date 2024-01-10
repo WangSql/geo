@@ -1,8 +1,5 @@
-import os.path
+import os
 import unittest
-
-import gdal
-import numpy as np
 
 from Raster import Raster
 
@@ -41,7 +38,7 @@ class TestRaster(unittest.TestCase):
         out_properties = in_raster.copy_properties()
         out_properties.bands = 1
         out_array = in_array * 1.0
-        out_properties.auto_set_dtype(out_array.dtype)
+        out_properties.auto_set_dtype(out_array)
 
         out_raster = Raster.create_raster(out_path, out_properties)
         out_raster.set_array(out_array)
