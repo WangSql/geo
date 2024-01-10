@@ -48,7 +48,7 @@ class TestRaster(unittest.TestCase):
         """栅格分块"""
         in_path = "./data/image_rgb.tif"
         raster = Raster.open_raster(in_path)
-        block_size = 256
+        block_size = 200
         block_list = raster.get_block_plan(block_size=block_size)
 
         # 写出分块数据
@@ -56,11 +56,10 @@ class TestRaster(unittest.TestCase):
         if not os.path.isdir(block_dir):
             os.makedirs(block_dir)
 
-        for i in range(len(block_list)):
-            block = block_list[i]
+        for block in block_list:
             block_data = raster.read_array(x_offset=block.x_offset, y_offset=block.y_offset,
-                                           x_size=block_size, y_size=block_size)
-            out_path = os.path.join(block_dir, block.get_block_name())
+                                           x_size=block.properties.width, y_size=block.properties.height)
+            out_path = os.path.join(block_dir, block.get_block_name() + '.tif')
             out_raster = Raster.create_raster(out_path, block.properties)
             out_raster.set_array(block_data)
             out_raster.close()
