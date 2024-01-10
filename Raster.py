@@ -16,7 +16,7 @@ class RasterBlock(object):
         self.properties = None
 
     def get_block_name(self):
-        return "{:04d}_{:04d}.tif".format(self.x_id, self.y_id)
+        return "{:04d}_{:04d}".format(self.x_id, self.y_id)
 
 
 class RasterProperties(object):
