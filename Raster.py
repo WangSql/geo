@@ -224,7 +224,7 @@ class Raster(object):
                 # 添加到列表
                 block_list.append(block)
 
-        return block_list
+        return block_list, col_num, row_num
 
 
 if __name__ == '__main__':
